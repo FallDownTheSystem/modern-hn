@@ -7,7 +7,7 @@
 // @supportURL   https://github.com/FallDownTheSystem/modern-hn/issues
 // @downloadURL  https://raw.githubusercontent.com/FallDownTheSystem/modern-hn/main/modern-hn.user.js
 // @updateURL    https://raw.githubusercontent.com/FallDownTheSystem/modern-hn/main/modern-hn.user.js
-// @version      1.6.0
+// @version      1.7.0
 // @description  Modern reading layout for Hacker News with thread folding, comment jumping, a calendar for past front pages, search by date, a page filter, and theme, font and text size settings.
 // @match        https://news.ycombinator.com/*
 // @run-at       document-start
@@ -123,6 +123,12 @@
 		--mhn-mono: var(--mhn-font-pick, ui-monospace), var(--mhn-mono-system);
 	}
 	--mhn-font: var(--mhn-font-pick, var(--mhn-font-base)), var(--mhn-font-base);
+	/* Headings use the text font until the reader chooses a heading font. */
+	--mhn-heading-base: var(--mhn-sans);
+	&[data-mhn-heading="serif"] { --mhn-heading-base: var(--mhn-serif); }
+	&[data-mhn-heading="mono"] { --mhn-heading-base: var(--mhn-mono-system); }
+	--mhn-heading: var(--mhn-font);
+	&[data-mhn-heading] { --mhn-heading: var(--mhn-heading-pick, var(--mhn-heading-base)), var(--mhn-heading-base); }
 
 	/* Radius rule: icon buttons are round, floating panels use --mhn-radius-lg,
 	   every other control and surface uses --mhn-radius. */
@@ -156,6 +162,10 @@
 	@media (max-width: 48rem) {
 		& { --mhn-indent: 16px; }
 	}
+
+	/* The roundness axis of a font has no CSS property. The rule names every
+	   element because a "font" shorthand sets the axes of its element back. */
+	&[data-mhn-round] * { font-variation-settings: "ROND" var(--mhn-round, 50); }
 
 	[hidden] { display: none !important; }
 	.noshow { display: none !important; }
@@ -546,6 +556,7 @@
 	}
 	.titleline > a {
 		padding-block: 0.125rem;
+		font-family: var(--mhn-heading);
 		font-weight: calc(var(--mhn-weight, 400) + 100);
 		overflow-wrap: anywhere;
 	}
@@ -1166,6 +1177,7 @@
 	.mhn-results h1 {
 		margin: 0;
 		color: var(--mhn-text-primary);
+		font-family: var(--mhn-heading);
 		font-size: 2rem;
 		font-weight: calc(var(--mhn-weight, 400) + 200);
 		line-height: 1.15;
@@ -1189,6 +1201,7 @@
 	/* The old results stay in place while new ones load, so the page does not jump. */
 	.mhn-results[aria-busy="true"] .mhn-hits { opacity: 0.5; }
 	.mhn-hit-title {
+		font-family: var(--mhn-heading);
 		font-size: 1rem;
 		font-weight: calc(var(--mhn-weight, 400) + 100);
 		line-height: 1.4;
@@ -1225,6 +1238,7 @@
 		column-gap: 0.75rem;
 		margin: 0;
 		color: var(--mhn-text-primary);
+		font-family: var(--mhn-heading);
 		font-size: 2.25rem;
 		font-weight: calc(var(--mhn-weight, 400) + 200);
 		line-height: 1.15;
@@ -1682,9 +1696,19 @@
 
 	/* ---------- Fonts ---------- */
 
+	const FONTSOURCE = 'https://cdn.jsdelivr.net/fontsource/fonts';
+	const FONT_CACHE = 'mhn-font';
+	const SUBSETS = {
+		latin: 'U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD',
+		'latin-ext': 'U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF',
+	};
+	const fontsourceFiles = (id, italic) => (italic ? ['normal', 'italic'] : ['normal']).flatMap((style) => (
+		Object.keys(SUBSETS).map((subset) => ({ style, subset, url: `${FONTSOURCE}/${id}:vf@latest/${subset}-wght-${style}.woff2` }))
+	));
+
 	// [id on the Fontsource CDN, name, kind, has an italic file].
 	// Every entry is a variable font with a weight axis, so one file covers all weights.
-	const WEB_FONTS = [
+	const FONTSOURCE_FONTS = [
 		['atkinson-hyperlegible-next', 'Atkinson Hyperlegible Next', 'sans', 1],
 		['bricolage-grotesque', 'Bricolage Grotesque', 'sans', 0],
 		['dm-sans', 'DM Sans', 'sans', 1],
@@ -1725,25 +1749,45 @@
 		['martian-mono', 'Martian Mono', 'mono', 0],
 		['roboto-mono', 'Roboto Mono', 'mono', 1],
 		['source-code-pro', 'Source Code Pro', 'mono', 1],
-	].map(([id, name, kind, italic]) => ({ id, name, kind, italic: Boolean(italic) }));
+	].map(([id, name, kind, italic]) => ({ id, name, kind, files: fontsourceFiles(id, italic) }));
+	// Fontsource does not have these fonts; the files come from their makers.
+	// Each version is fixed because the path of a file is not a promise of the maker.
+	const MAKER_FONTS = [
+		{
+			// One file has the weight, roundness and optical size axes. The drawn
+			// obliques are separate files with a fixed roundness, so the browser
+			// slants this file for italic text and the roundness stays the same.
+			id: 'allo',
+			name: 'Allo',
+			kind: 'sans',
+			round: true,
+			files: [{ style: 'normal', url: 'https://cdn.jsdelivr.net/gh/joshpuckett/allo@1.0.3/fonts/webfonts/AlloVariable.woff2' }],
+		},
+		{
+			// One weight and no italic.
+			id: 'geist-serif',
+			name: 'Geist Serif',
+			kind: 'serif',
+			files: [{ style: 'normal', url: 'https://cdn.jsdelivr.net/npm/geist@1.9.2/dist/fonts/geist-serif/GeistSerif-Regular.woff2' }],
+		},
+	];
+	const WEB_FONTS = [...FONTSOURCE_FONTS, ...MAKER_FONTS].sort((a, b) => a.name.localeCompare(b.name));
 	const WEB_FONT = new Map(WEB_FONTS.map((font) => [font.id, font]));
 	// Fonts of the device. The first three are in the "System" group of the list.
 	const LOCAL_FONTS = [['default', 'Sans', 'sans'], ['system-serif', 'Serif', 'serif'], ['system-mono', 'Mono', 'mono'], ['custom', 'Custom…', 'sans']];
 	const LOCAL_KIND = new Map(LOCAL_FONTS.map(([id, , kind]) => [id, kind]));
 	// Settings saved by version 1.1 used these names.
 	const OLD_FONT_IDS = { sans: 'default', serif: 'system-serif', mono: 'system-mono' };
-
-	const FONT_CDN = 'https://cdn.jsdelivr.net/fontsource/fonts';
-	const FONT_CACHE = 'mhn-font';
-	const SUBSETS = {
-		latin: 'U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD',
-		'latin-ext': 'U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF',
-	};
+	// The text and the headings each have a font. A heading font of "same" follows the text.
+	const FONT_ROLES = [
+		{ key: 'font', custom: 'custom', attribute: 'mhnFont', variable: '--mhn-font-pick' },
+		{ key: 'heading', custom: 'headingCustom', attribute: 'mhnHeading', variable: '--mhn-heading-pick' },
+	];
 
 	// Hacker News allows font files from its own server only. The userscript
 	// manager downloads the file, and the page gets the bytes, which that rule
-	// does not cover. The bytes of the chosen font stay in the manager's
-	// storage, so the next page shows the font at once.
+	// does not cover. The bytes of the chosen fonts stay in the manager's
+	// storage, so the next page shows the fonts at once.
 	const gm = {
 		request: typeof GM_xmlhttpRequest === 'function' ? GM_xmlhttpRequest : null,
 		get: typeof GM_getValue === 'function' ? GM_getValue : () => undefined,
@@ -1796,23 +1840,35 @@
 		}
 	}
 
+	// The saved fonts: the files of each font under its id.
+	function readFontCache() {
+		const saved = gm.get(FONT_CACHE);
+		if (!saved || typeof saved !== 'object') return {};
+		// Version 1.6 saved one font, as { id, files }.
+		if (typeof saved.id === 'string' && Array.isArray(saved.files)) return { [saved.id]: saved.files };
+		return saved;
+	}
+
 	async function fetchFont(font) {
-		const cached = gm.get(FONT_CACHE);
-		if (cached && cached.id === font.id && Array.isArray(cached.files)) {
-			registerFont(font, cached.files);
+		const cached = readFontCache()[font.id];
+		if (Array.isArray(cached)) {
+			registerFont(font, cached);
 			return;
 		}
-		const wanted = [];
-		for (const style of font.italic ? ['normal', 'italic'] : ['normal']) {
-			for (const subset of Object.keys(SUBSETS)) wanted.push({ subset, style });
-		}
-		const files = await Promise.all(wanted.map(async (file) => ({
-			...file,
-			data: toBase64((await gmGet(`${FONT_CDN}/${font.id}:vf@latest/${file.subset}-wght-${file.style}.woff2`, 'arraybuffer', 20000)).response),
+		const files = await Promise.all(font.files.map(async ({ style, subset, url }) => ({
+			style,
+			subset,
+			data: toBase64((await gmGet(url, 'arraybuffer', 20000)).response),
 		})));
 		registerFont(font, files);
 		try {
-			gm.set(FONT_CACHE, { id: font.id, files });
+			// Only the fonts in use stay, so the storage does not grow with each font that the reader tries.
+			const saved = { ...readFontCache(), [font.id]: files };
+			const kept = {};
+			for (const { key } of FONT_ROLES) {
+				if (saved[prefs[key]]) kept[prefs[key]] = saved[prefs[key]];
+			}
+			gm.set(FONT_CACHE, kept);
 		} catch {
 			// Without the saved copy the font still works; it downloads again on the next page.
 		}
@@ -1841,9 +1897,15 @@
 		['contrast', 'Contrast', 0, 100, 5, String],
 		['size', 'Text size', 13, 20, 1, (value) => `${value} px`],
 		['weight', 'Text weight', 300, 500, 25, String],
+		['round', 'Roundness', 0, 100, 5, String],
 		['width', 'Page width', 80, 160, 5, (value) => `${value}%`],
 	];
-	const DEFAULTS = { theme: 'dark', tone: -25, lightness: 50, contrast: 50, font: 'default', custom: '', size: 16, weight: 400, width: 100, votes: false };
+	const DEFAULTS = { theme: 'dark', tone: -25, lightness: 50, contrast: 50, font: 'default', custom: '', heading: 'same', headingCustom: '', size: 16, weight: 400, round: 50, width: 100, votes: false };
+
+	// The roundness setting applies only when a font in use has that axis.
+	const hasRoundFont = () => FONT_ROLES.some(({ key }) => WEB_FONT.get(prefs[key])?.round);
+	const isFontId = (id) => WEB_FONT.has(id) || LOCAL_KIND.has(id);
+	const cleanFontName = (name) => String(name).replace(/["\\;{}<>\r\n]/g, '').trim().slice(0, 80);
 
 	// Saved values come from storage that other code can write, so each one is
 	// checked before it reaches an attribute or a style.
@@ -1854,8 +1916,10 @@
 		if (raw && raw.lightness == null && raw.darkness != null) value.lightness = 100 - Number(raw.darkness);
 		const clean = {
 			theme: THEMES.some(([id]) => id === value.theme) ? value.theme : DEFAULTS.theme,
-			font: WEB_FONT.has(font) || LOCAL_KIND.has(font) ? font : DEFAULTS.font,
-			custom: String(value.custom).replace(/["\\;{}<>\r\n]/g, '').trim().slice(0, 80),
+			font: isFontId(font) ? font : DEFAULTS.font,
+			custom: cleanFontName(value.custom),
+			heading: isFontId(value.heading) ? value.heading : DEFAULTS.heading,
+			headingCustom: cleanFontName(value.headingCustom),
 			votes: value.votes === true,
 		};
 		for (const [key, , min, max] of SLIDERS) {
@@ -1874,7 +1938,7 @@
 	}
 
 	let prefs = readPrefs();
-	// The settings panel replaces this to show the state of a font download.
+	// The settings panel replaces this to show the state of the font download of a role.
 	let showFontState = () => {};
 
 	// A write to a variable on the root element makes the browser style the
@@ -1890,10 +1954,7 @@
 
 	function applyPrefs() {
 		const root = document.documentElement;
-		const web = WEB_FONT.get(prefs.font);
-		const fontKind = web ? web.kind : LOCAL_KIND.get(prefs.font);
 		if (root.dataset.mhnTheme !== prefs.theme) root.dataset.mhnTheme = prefs.theme;
-		if (root.dataset.mhnFont !== fontKind) root.dataset.mhnFont = fontKind;
 		if (root.hasAttribute('data-mhn-votes') !== prefs.votes) root.toggleAttribute('data-mhn-votes', prefs.votes);
 		setRootVar('--mhn-d', 1 - prefs.lightness / 100);
 		setRootVar('--mhn-k', prefs.contrast / 100);
@@ -1902,18 +1963,30 @@
 		setRootVar('--mhn-size', prefs.size);
 		setRootVar('--mhn-weight', prefs.weight);
 		setRootVar('--mhn-w', prefs.width / 100);
-		setRootVar('--mhn-font-pick', web ? `"mhn-${web.id}"` : prefs.font === 'custom' && prefs.custom ? `"${prefs.custom}"` : '');
+		setRootVar('--mhn-round', prefs.round);
+		if (root.hasAttribute('data-mhn-round') !== hasRoundFont()) root.toggleAttribute('data-mhn-round', hasRoundFont());
+		for (const role of FONT_ROLES) applyFont(role);
+	}
+
+	function applyFont({ key, custom, attribute, variable }) {
+		const root = document.documentElement;
+		const id = prefs[key];
+		const web = WEB_FONT.get(id);
+		const kind = web ? web.kind : LOCAL_KIND.get(id);
+		if (!kind) delete root.dataset[attribute];
+		else if (root.dataset[attribute] !== kind) root.dataset[attribute] = kind;
+		setRootVar(variable, web ? `"mhn-${web.id}"` : id === 'custom' && prefs[custom] ? `"${prefs[custom]}"` : '');
 
 		if (!web) {
-			showFontState('');
+			showFontState(key, '');
 			return;
 		}
-		showFontState('loading');
-		const report = (state) => { if (prefs.font === web.id) showFontState(state); };
+		showFontState(key, 'loading');
+		const report = (state) => { if (prefs[key] === web.id) showFontState(key, state); };
 		loadFont(web).then(() => report(''), () => report('error'));
 	}
 
-	const LAYOUT_PREFS = new Set(['size', 'weight', 'width', 'custom']);
+	const LAYOUT_PREFS = new Set(['size', 'weight', 'round', 'width', 'custom', 'headingCustom']);
 	let commitTimer = 0;
 	function commitPrefs() {
 		clearTimeout(commitTimer);
@@ -3229,22 +3302,38 @@
 
 		const option = (id, name) => el('option', { value: id }, name);
 		const group = (label, fonts) => el('optgroup', { label }, ...fonts.map((font) => option(font.id, font.name)));
-		const fontSelect = el('select', { id: 'mhn-font', name: 'font' },
-			group('Sans', WEB_FONTS.filter((font) => font.kind === 'sans')),
-			group('Serif', WEB_FONTS.filter((font) => font.kind === 'serif')),
-			group('Mono', WEB_FONTS.filter((font) => font.kind === 'mono')),
-			el('optgroup', { label: 'System' }, ...LOCAL_FONTS.filter(([id]) => id !== 'custom').map(([id, name]) => option(id, name))),
-			option('custom', 'Custom…'),
-		);
-		const fontName = el('input', { type: 'text', id: 'mhn-font-name', name: 'custom', autocomplete: 'off', spellcheck: 'false', placeholder: 'Georgia' });
-		const fontNameField = el('div', {},
-			el('label', { class: 'mhn-label', for: 'mhn-font-name' }, 'Name of a font on this device'),
-			fontName,
-		);
-		const fontStatus = el('p', { class: 'mhn-status', role: 'status' });
-		const fontField = el('div', {}, el('label', { class: 'mhn-label', for: 'mhn-font' }, 'Font'), selectBox(fontSelect), fontStatus);
-		showFontState = (state) => {
-			fontStatus.textContent = state === 'loading' ? 'Font download in progress…'
+		// One list of fonts and one field for the name of a font on the device.
+		const fontPicker = ({ key, custom }, label, nameLabel, first) => {
+			const select = el('select', { id: `mhn-${key}`, name: key },
+				...first,
+				group('Sans', WEB_FONTS.filter((font) => font.kind === 'sans')),
+				group('Serif', WEB_FONTS.filter((font) => font.kind === 'serif')),
+				group('Mono', WEB_FONTS.filter((font) => font.kind === 'mono')),
+				el('optgroup', { label: 'System' }, ...LOCAL_FONTS.filter(([id]) => id !== 'custom').map(([id, name]) => option(id, name))),
+				option('custom', 'Custom…'),
+			);
+			const name = el('input', { type: 'text', id: `mhn-${key}-name`, name: custom, autocomplete: 'off', spellcheck: 'false', placeholder: 'Georgia' });
+			const nameField = el('div', {}, el('label', { class: 'mhn-label', for: name.id }, nameLabel), name);
+			const status = el('p', { class: 'mhn-status', role: 'status' });
+			return {
+				key,
+				status,
+				field: el('div', {}, el('label', { class: 'mhn-label', for: select.id }, label), selectBox(select), status),
+				nameField,
+				sync: () => {
+					select.value = prefs[key];
+					nameField.hidden = prefs[key] !== 'custom';
+					if (document.activeElement !== name) name.value = prefs[custom];
+				},
+			};
+		};
+		const [textRole, headingRole] = FONT_ROLES;
+		const pickers = [
+			fontPicker(textRole, 'Text font', 'Name of a font on this device', []),
+			fontPicker(headingRole, 'Heading font', 'Name of a heading font on this device', [option('same', 'Same as the text')]),
+		];
+		showFontState = (key, state) => {
+			pickers.find((picker) => picker.key === key).status.textContent = state === 'loading' ? 'Font download in progress…'
 				: state === 'error' ? 'The font did not download. Check the connection, then select the font again.'
 				: '';
 		};
@@ -3260,7 +3349,7 @@
 				slider('lightness'),
 				slider('contrast'),
 			),
-			el('div', { class: 'mhn-group' }, fontField, fontNameField, slider('size'), slider('weight')),
+			el('div', { class: 'mhn-group' }, ...pickers.flatMap((picker) => [picker.field, picker.nameField]), slider('size'), slider('weight'), slider('round')),
 			el('div', { class: 'mhn-group' }, slider('width'), votesField),
 			reset,
 		);
@@ -3275,9 +3364,8 @@
 				output.textContent = format(prefs[key]);
 			}
 			votes.checked = prefs.votes;
-			fontSelect.value = prefs.font;
-			fontNameField.hidden = prefs.font !== 'custom';
-			if (document.activeElement !== fontName) fontName.value = prefs.custom;
+			for (const picker of pickers) picker.sync();
+			slider('round').hidden = !hasRoundFont();
 		};
 		const onChange = (event) => {
 			const input = event.target;

@@ -21,7 +21,7 @@ The userscript manager gets later versions from this repository.
 - **Past front pages:** a day control in the header with a calendar. The arrows go one day back and forward.
 - **Search:** a search bar in the header. It searches all of Hacker News by date or by popularity, and shows the results in the page. It can also filter the stories or comments of the current page.
 - **More:** the "More" link adds the next page of stories or comments to the current page.
-- **Settings:** theme, tone, lightness, contrast, font (40 web fonts, system fonts, or a font on your computer), text size, text weight, page width, and vote arrows.
+- **Settings:** theme, tone, lightness, contrast, a text font and a heading font (42 web fonts, system fonts, or a font on your computer), text size, text weight, roundness for the Allo font, page width, and vote arrows.
 
 ## Keys
 
