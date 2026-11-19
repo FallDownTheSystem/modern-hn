@@ -2,9 +2,7 @@
 
 A userscript that gives [Hacker News](https://news.ycombinator.com) a modern reading layout. It is one file with no build step. It is not affiliated with Hacker News or Y Combinator.
 
-[![A short film of the features: layout, threads, search, past front pages and settings](demo.webp)](demo.mp4)
-
-The picture is a silent preview. Select it to open the full video, [`demo.mp4`](demo.mp4).
+https://github.com/user-attachments/assets/2cb45571-34af-4791-bf37-4614a6313de5
 
 ## Install
 
