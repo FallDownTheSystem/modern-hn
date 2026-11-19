@@ -1,0 +1,12 @@
+{
+	"name": "modern-hn-evals",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"perf": "node perf.mjs",
+		"check": "node check.mjs"
+	},
+	"dependencies": {
+		"playwright-core": "^1.65.1"
+	}
+}

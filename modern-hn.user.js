@@ -7,18 +7,20 @@
 // @supportURL   https://github.com/FallDownTheSystem/modern-hn/issues
 // @downloadURL  https://raw.githubusercontent.com/FallDownTheSystem/modern-hn/main/modern-hn.user.js
 // @updateURL    https://raw.githubusercontent.com/FallDownTheSystem/modern-hn/main/modern-hn.user.js
-// @version      1.7.0
+// @version      1.8.0
 // @description  Modern reading layout for Hacker News with thread folding, comment jumping, a calendar for past front pages, search by date, a page filter, and theme, font and text size settings.
 // @match        https://news.ycombinator.com/*
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_deleteValue
+// @grant        GM_listValues
 // @connect      cdn.jsdelivr.net
 // @connect      hn.algolia.com
 // ==/UserScript==
 
-/* global GM_xmlhttpRequest, GM_getValue, GM_setValue */
+/* global GM_xmlhttpRequest, GM_getValue, GM_setValue, GM_deleteValue, GM_listValues */
 
 (() => {
 	'use strict';
@@ -33,6 +35,7 @@
 	// Units: content is sized in rem and follows the reader's text size. The
 	// header, the floating panels and the jump buttons are sized in px, so they
 	// stay still while the reader changes the text size.
+	const HIGHLIGHT_COLOURS = 'background-color: var(--mhn-accent-subtle); color: var(--mhn-text-primary);';
 	const css = String.raw`
 :root:root {
 	/* Every colour is a light-dark() pair, so the theme is one switch: color-scheme. */
@@ -139,8 +142,6 @@
 	/* Caps a comment at about 75 characters a line at the default page width;
 	   deeper replies keep that width until the column runs out. */
 	--mhn-measure: calc(var(--mhn-col) * 0.8);
-	/* The script replaces this with the measured header height. */
-	--mhn-header: 56px;
 	--mhn-indent: 24px;
 	--mhn-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
 	--mhn-press: transform 160ms var(--mhn-ease-out);
@@ -152,7 +153,11 @@
 		background: var(--mhn-bg-page);
 		accent-color: var(--mhn-accent-solid);
 		scrollbar-color: var(--mhn-border-strong) var(--mhn-bg-page);
-		scroll-padding-block-start: calc(var(--mhn-header) + 1rem);
+		/* The space for the pinned header. The script replaces this with the
+		   measured height. It writes this property and not a variable: a
+		   new value of a variable on the root element makes the browser
+		   style the page again. */
+		scroll-padding-block-start: calc(57px + 1rem);
 		text-wrap: pretty;
 		-webkit-font-smoothing: antialiased;
 		-moz-osx-font-smoothing: grayscale;
@@ -171,10 +176,11 @@
 	.noshow { display: none !important; }
 	.nosee { visibility: hidden; pointer-events: none; }
 
-	::selection {
-		background: var(--mhn-accent-subtle);
-		color: var(--mhn-text-primary);
-	}
+	/* The colours of selected text, and of the matches of the page filter, are
+	   rules on the root element alone, and they pass down the tree. A rule
+	   for all elements makes the browser compute one more style for each
+	   element on each style pass. */
+	&::selection { ${HIGHLIGHT_COLOURS} }
 
 	body {
 		margin: 0;
@@ -185,8 +191,12 @@
 		font: var(--mhn-weight, 400) 0.875rem/1.5 var(--mhn-font);
 	}
 
-	/* Pages without the main table: login, the guidelines, error messages. */
-	body:not(:has(#hnmain)) {
+	/* Pages without the main table: login, the guidelines, error messages.
+	   Each :has() in this file names the full path to its target with child
+	   combinators. The browser then looks at a few elements. With a plain
+	   :has(#hnmain) it walks every element of the page on each style pass,
+	   which is most of the cost of a setting change on a long thread. */
+	body:not(:has(> center > #hnmain)) {
 		box-sizing: border-box;
 		max-width: calc(var(--mhn-col) + 2rem);
 		margin-inline: auto;
@@ -194,17 +204,17 @@
 		font-size: 1rem;
 		line-height: 1.6;
 	}
-	body:not(:has(#hnmain)) b { color: var(--mhn-text-primary); }
-	body:not(:has(#hnmain)) td { padding-block: 0.25rem; padding-inline-end: 0.75rem; }
-	body:not(:has(#hnmain)) table[width] { width: 100%; }
-	body:not(:has(#hnmain)) form table {
+	body:not(:has(> center > #hnmain)) b { color: var(--mhn-text-primary); }
+	body:not(:has(> center > #hnmain)) td { padding-block: 0.25rem; padding-inline-end: 0.75rem; }
+	body:not(:has(> center > #hnmain)) table[width] { width: 100%; }
+	body:not(:has(> center > #hnmain)) form table {
 		width: 100%;
 		max-width: 24rem;
 	}
-	body:not(:has(#hnmain)) form td:first-child { width: 1%; white-space: nowrap; }
-	body:not(:has(#hnmain)) form td:last-child { padding-inline-end: 0; }
-	body:not(:has(#hnmain)) form td input { width: 100%; }
-	body:not(:has(#hnmain)) form + a { display: inline-block; margin-block-start: 1rem; }
+	body:not(:has(> center > #hnmain)) form td:first-child { width: 1%; white-space: nowrap; }
+	body:not(:has(> center > #hnmain)) form td:last-child { padding-inline-end: 0; }
+	body:not(:has(> center > #hnmain)) form td input { width: 100%; }
+	body:not(:has(> center > #hnmain)) form + a { display: inline-block; margin-block-start: 1rem; }
 
 	/* The page is in quirks mode, where tables do not inherit font or colour. */
 	table {
@@ -227,6 +237,9 @@
 
 	.default, .title, .subtext, .comhead, .comment, .pagetop, .yclinks, .admin, .admin td {
 		font-family: var(--mhn-font);
+	}
+	.titleline > a, .mhn-results h1, .mhn-hit-title, .mhn-date h1 {
+		font-family: var(--mhn-heading);
 	}
 
 	a:link, a:visited {
@@ -499,6 +512,12 @@
 	   stays for screen readers. These are media queries and not container
 	   queries, because the header cannot query itself and the settings panel
 	   is outside the header. */
+	/* The reader can set the header to scroll with the page. The script writes
+	   the space for the header on the root element; this rule outranks it. */
+	&[data-mhn-unpinned] {
+		scroll-padding-block-start: 1rem !important;
+		.mhn-header { position: static; }
+	}
 	@media (max-width: 640px) {
 		.mhn-header { position: static; }
 		.mhn-tabs { flex: 1 1 100%; }
@@ -556,7 +575,6 @@
 	}
 	.titleline > a {
 		padding-block: 0.125rem;
-		font-family: var(--mhn-heading);
 		font-weight: calc(var(--mhn-weight, 400) + 100);
 		overflow-wrap: anywhere;
 	}
@@ -638,8 +656,9 @@
 	}
 	/* On a wide screen a long story title shortens instead of pushing the row onto two lines. */
 	@media (min-width: 48.0625rem) {
-		.mhn-items:has(.mhn-pair) { flex-wrap: nowrap; }
-		.mhn-items:has(.mhn-pair) > :not(:has(.mhn-pair)) {
+		.mhn-items:has(> .mhn-item > .mhn-pair) { flex-wrap: nowrap; }
+		.mhn-items:has(> .mhn-item > .mhn-pair) > .mhn-item:not(:has(> .mhn-pair)),
+		.mhn-items:has(> .mhn-item > .mhn-pair) > .mhn-navs {
 			flex-shrink: 0;
 			white-space: nowrap;
 		}
@@ -807,6 +826,36 @@
 	&[op="newcomments"] #bigbox > td > table {
 		table-layout: fixed;
 		width: 100%;
+	}
+	/* The browser does not style, lay out or paint a comment that is far from
+	   the view. A change of a setting then costs the same on a long thread as
+	   on a short one. A table row cannot skip its content, so the rows are
+	   blocks; the table has one column, so the layout stays the same. The
+	   rows of the "threads" page are blocks already. */
+	table.comment-tree,
+	table.comment-tree > tbody,
+	table.comment-tree > tbody > tr,
+	table.comment-tree > tbody > tr > td {
+		display: block;
+	}
+	tr.comtr {
+		content-visibility: auto;
+		contain-intrinsic-block-size: auto 8rem;
+		/* A wide code block grows out of the column, and the skip rule clips
+		   a row at its edges. The margin keeps that part of the block in view. */
+		overflow-clip-margin: 100vw;
+	}
+	/* A comment that a fold or the page filter hides stays a box with no
+	   height, and the browser skips its content. With "display: none", a
+	   browser with its accessibility tree on reads each element of each
+	   hidden comment: 150 ms on a thread of 961 comments that starts folded. */
+	@supports (content-visibility: hidden) {
+		tr.comtr.noshow, tr.comtr.mhn-filtered {
+			display: block !important;
+			content-visibility: hidden;
+			contain-intrinsic-block-size: 0px;
+			height: 0;
+		}
 	}
 	td.ind { width: calc(var(--mhn-depth, 0) * var(--mhn-indent)); }
 	td.ind img {
@@ -1073,16 +1122,15 @@
 
 	/* ---------- Footer ---------- */
 
-	#hnmain > tbody > tr:has(.yclinks) {
+	#hnmain > tbody > tr:has(> td > center > .yclinks) {
 		margin-block-start: 2.5rem;
 		padding-block-start: 1.25rem;
 		border-block-start: 1px solid var(--mhn-border-subtle);
 		color: var(--mhn-text-tertiary);
 		font-size: 0.8125rem;
 		text-align: center;
+		& > td > img, & > td > table, & > td > br, & center br { display: none; }
 	}
-	#hnmain > tbody > tr:has(.yclinks) > td > :is(img, table, br) { display: none; }
-	#hnmain > tbody > tr:has(.yclinks) center br { display: none; }
 	.yclinks {
 		justify-content: center;
 		color: var(--mhn-text-tertiary);
@@ -1158,10 +1206,8 @@
 	/* ---------- Page filter and search results ---------- */
 
 	.mhn-filtered { display: none !important; }
-	::highlight(mhn-find) {
-		background-color: var(--mhn-accent-subtle);
-		color: var(--mhn-text-primary);
-	}
+	/* On the root element alone, as the selection colours are. */
+	&::highlight(mhn-find) { ${HIGHLIGHT_COLOURS} }
 	mark {
 		border-radius: 2px;
 		background: var(--mhn-accent-subtle);
@@ -1177,7 +1223,6 @@
 	.mhn-results h1 {
 		margin: 0;
 		color: var(--mhn-text-primary);
-		font-family: var(--mhn-heading);
 		font-size: 2rem;
 		font-weight: calc(var(--mhn-weight, 400) + 200);
 		line-height: 1.15;
@@ -1201,7 +1246,6 @@
 	/* The old results stay in place while new ones load, so the page does not jump. */
 	.mhn-results[aria-busy="true"] .mhn-hits { opacity: 0.5; }
 	.mhn-hit-title {
-		font-family: var(--mhn-heading);
 		font-size: 1rem;
 		font-weight: calc(var(--mhn-weight, 400) + 100);
 		line-height: 1.4;
@@ -1238,7 +1282,6 @@
 		column-gap: 0.75rem;
 		margin: 0;
 		color: var(--mhn-text-primary);
-		font-family: var(--mhn-heading);
 		font-size: 2.25rem;
 		font-weight: calc(var(--mhn-weight, 400) + 200);
 		line-height: 1.15;
@@ -1690,14 +1733,20 @@
 
 	let depthRules = '';
 	for (let depth = 1; depth <= MAX_DEPTH; depth++) {
-		// The cells after the indent cell need the depth too: a code block sizes itself from it.
-		depthRules += `:root:root :is(td.ind[indent="${depth}"],td.ind[indent="${depth}"]~td){--mhn-depth:${depth}}`;
+		// The text cell needs the depth too: a code block sizes itself from it.
+		// Each selector ends in a class, so the browser tests these 120 rules
+		// only on the two cells of a comment. A selector that ends in :is()
+		// is tested on every element of the page.
+		depthRules += `:root:root td.ind[indent="${depth}"],:root:root td.ind[indent="${depth}"]~td.default{--mhn-depth:${depth}}`;
 	}
 
 	/* ---------- Fonts ---------- */
 
 	const FONTSOURCE = 'https://cdn.jsdelivr.net/fontsource/fonts';
-	const FONT_CACHE = 'mhn-font';
+	const FONT_KEY = 'mhn-font:';
+	const OLD_FONT_KEY = 'mhn-font';
+	// Sent on the document when a setting or the state of a font changes.
+	const SETTINGS_EVENT = 'mhn-settings';
 	const SUBSETS = {
 		latin: 'U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD',
 		'latin-ext': 'U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF',
@@ -1779,19 +1828,23 @@
 	// Settings saved by version 1.1 used these names.
 	const OLD_FONT_IDS = { sans: 'default', serif: 'system-serif', mono: 'system-mono' };
 	// The text and the headings each have a font. A heading font of "same" follows the text.
+	const SAME_FONT = 'same';
+	// [key]: the setting with the font id. [nameKey]: the setting with the name
+	// of a font on the device. [follows]: the label of the choice that follows the text font.
 	const FONT_ROLES = [
-		{ key: 'font', custom: 'custom', attribute: 'mhnFont', variable: '--mhn-font-pick' },
-		{ key: 'heading', custom: 'headingCustom', attribute: 'mhnHeading', variable: '--mhn-heading-pick' },
+		{ key: 'font', nameKey: 'custom', attribute: 'data-mhn-font', variable: '--mhn-font-pick', label: 'Text font', nameLabel: 'Name of a font on this device' },
+		{ key: 'heading', nameKey: 'headingCustom', attribute: 'data-mhn-heading', variable: '--mhn-heading-pick', label: 'Heading font', nameLabel: 'Name of a heading font on this device', follows: 'Same as the text' },
 	];
 
-	// Hacker News allows font files from its own server only. The userscript
-	// manager downloads the file, and the page gets the bytes, which that rule
-	// does not cover. The bytes of the chosen fonts stay in the manager's
-	// storage, so the next page shows the fonts at once.
+	// The functions of the userscript manager. The site's security policy
+	// blocks a request from the page to another site, and the storage of the
+	// page is too small for font files.
 	const gm = {
 		request: typeof GM_xmlhttpRequest === 'function' ? GM_xmlhttpRequest : null,
 		get: typeof GM_getValue === 'function' ? GM_getValue : () => undefined,
 		set: typeof GM_setValue === 'function' ? GM_setValue : () => {},
+		remove: typeof GM_deleteValue === 'function' ? GM_deleteValue : () => {},
+		keys: typeof GM_listValues === 'function' ? GM_listValues : () => [],
 	};
 
 	function toBase64(buffer) {
@@ -1810,8 +1863,6 @@
 		return bytes;
 	}
 
-	// The userscript manager makes the request: the site's security policy
-	// blocks a request to another site from the page.
 	function gmGet(url, responseType, timeout) {
 		return new Promise((resolve, reject) => {
 			if (!gm.request) {
@@ -1840,48 +1891,60 @@
 		}
 	}
 
-	// The saved fonts: the files of each font under its id.
-	function readFontCache() {
-		const saved = gm.get(FONT_CACHE);
-		if (!saved || typeof saved !== 'object') return {};
-		// Version 1.6 saved one font, as { id, files }.
-		if (typeof saved.id === 'string' && Array.isArray(saved.files)) return { [saved.id]: saved.files };
-		return saved;
-	}
-
-	async function fetchFont(font) {
-		const cached = readFontCache()[font.id];
-		if (Array.isArray(cached)) {
-			registerFont(font, cached);
-			return;
-		}
-		const files = await Promise.all(font.files.map(async ({ style, subset, url }) => ({
-			style,
-			subset,
-			data: toBase64((await gmGet(url, 'arraybuffer', 20000)).response),
-		})));
-		registerFont(font, files);
+	// The files of a downloaded font stay in the manager's storage, each font
+	// under its own key, so the next page shows the font at once and reads
+	// only the fonts in use.
+	function saveFont(id, files) {
 		try {
-			// Only the fonts in use stay, so the storage does not grow with each font that the reader tries.
-			const saved = { ...readFontCache(), [font.id]: files };
-			const kept = {};
-			for (const { key } of FONT_ROLES) {
-				if (saved[prefs[key]]) kept[prefs[key]] = saved[prefs[key]];
-			}
-			gm.set(FONT_CACHE, kept);
+			gm.set(FONT_KEY + id, files);
 		} catch {
 			// Without the saved copy the font still works; it downloads again on the next page.
 		}
 	}
 
-	const fontJobs = new Map();
-	function loadFont(font) {
-		if (!fontJobs.has(font.id)) {
-			const job = fetchFont(font);
-			job.catch(() => fontJobs.delete(font.id));
-			fontJobs.set(font.id, job);
+	function savedFont(id) {
+		const files = gm.get(FONT_KEY + id);
+		if (Array.isArray(files)) return files;
+		// Version 1.6 saved one font as { id, files } and version 1.7 saved
+		// { [id]: files }, both under one key.
+		const old = gm.get(OLD_FONT_KEY);
+		const oldFiles = old && typeof old === 'object' ? (old.id === id ? old.files : old[id]) : null;
+		if (!Array.isArray(oldFiles)) return null;
+		saveFont(id, oldFiles);
+		return oldFiles;
+	}
+
+	// Removes each saved font that is not in use, so the storage does not grow
+	// with each font that the reader tries.
+	function pruneFonts(idsInUse) {
+		for (const key of gm.keys()) {
+			if (key === OLD_FONT_KEY || (key.startsWith(FONT_KEY) && !idsInUse.includes(key.slice(FONT_KEY.length)))) gm.remove(key);
 		}
-		return fontJobs.get(font.id);
+	}
+
+	async function fetchFont(font) {
+		let files = savedFont(font.id);
+		if (!files) {
+			files = await Promise.all(font.files.map(async ({ style, subset, url }) => ({
+				style,
+				subset,
+				data: toBase64((await gmGet(url, 'arraybuffer', 20000)).response),
+			})));
+			saveFont(font.id, files);
+		}
+		registerFont(font, files);
+	}
+
+	// The state of each font that the page asked for: "loading", "ready" or "error".
+	const fontState = new Map();
+	function loadFont(font) {
+		if (fontState.has(font.id)) return;
+		const settle = (state) => {
+			fontState.set(font.id, state);
+			document.dispatchEvent(new Event(SETTINGS_EVENT));
+		};
+		fontState.set(font.id, 'loading');
+		fetchFont(font).then(() => settle('ready'), () => settle('error'));
 	}
 
 	/* ---------- Display settings ---------- */
@@ -1900,10 +1963,13 @@
 		['round', 'Roundness', 0, 100, 5, String],
 		['width', 'Page width', 80, 160, 5, (value) => `${value}%`],
 	];
-	const DEFAULTS = { theme: 'dark', tone: -25, lightness: 50, contrast: 50, font: 'default', custom: '', heading: 'same', headingCustom: '', size: 16, weight: 400, round: 50, width: 100, votes: false };
+	const DEFAULTS = { theme: 'dark', tone: -25, lightness: 50, contrast: 50, font: 'default', custom: '', heading: 'same', headingCustom: '', size: 16, weight: 400, round: 50, width: 100, votes: false, pin: true, fold: -1 };
+	// [depth of the comments that start folded, label]. 0 is a top comment, 1 is a reply to it.
+	const FOLD_DEPTHS = [[-1, 'Off'], [0, '0: top comments'], [1, '1: replies'], [2, '2'], [3, '3'], [4, '4'], [5, '5']];
 
 	// The roundness setting applies only when a font in use has that axis.
 	const hasRoundFont = () => FONT_ROLES.some(({ key }) => WEB_FONT.get(prefs[key])?.round);
+	const fontsInUse = () => FONT_ROLES.map(({ key }) => prefs[key]);
 	const isFontId = (id) => WEB_FONT.has(id) || LOCAL_KIND.has(id);
 	const cleanFontName = (name) => String(name).replace(/["\\;{}<>\r\n]/g, '').trim().slice(0, 80);
 
@@ -1911,17 +1977,20 @@
 	// checked before it reaches an attribute or a style.
 	function cleanPrefs(raw) {
 		const value = { ...DEFAULTS, ...(raw && typeof raw === 'object' ? raw : {}) };
-		const font = OLD_FONT_IDS[value.font] || value.font;
 		// Version 1.2 saved the same control as "darkness", with the scale reversed.
 		if (raw && raw.lightness == null && raw.darkness != null) value.lightness = 100 - Number(raw.darkness);
+		const fold = Number(value.fold);
 		const clean = {
 			theme: THEMES.some(([id]) => id === value.theme) ? value.theme : DEFAULTS.theme,
-			font: isFontId(font) ? font : DEFAULTS.font,
-			custom: cleanFontName(value.custom),
-			heading: isFontId(value.heading) ? value.heading : DEFAULTS.heading,
-			headingCustom: cleanFontName(value.headingCustom),
 			votes: value.votes === true,
+			pin: value.pin !== false,
+			fold: FOLD_DEPTHS.some(([depth]) => depth === fold) ? fold : DEFAULTS.fold,
 		};
+		for (const { key, nameKey, follows } of FONT_ROLES) {
+			const id = OLD_FONT_IDS[value[key]] || value[key];
+			clean[key] = isFontId(id) || (follows && id === SAME_FONT) ? id : DEFAULTS[key];
+			clean[nameKey] = cleanFontName(value[nameKey]);
+		}
 		for (const [key, , min, max] of SLIDERS) {
 			const number = Math.round(Number(value[key]));
 			clean[key] = Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : DEFAULTS[key];
@@ -1938,24 +2007,33 @@
 	}
 
 	let prefs = readPrefs();
-	// The settings panel replaces this to show the state of the font download of a role.
-	let showFontState = () => {};
 
-	// A write to a variable on the root element makes the browser style the
-	// whole page again, so only a variable with a new value is written.
-	const appliedVars = new Map();
+	// A write to a variable or an attribute of the root element makes the
+	// browser style the page again, so only a new value is written.
+	const appliedToRoot = new Map();
+	const isNewForRoot = (name, value) => {
+		if (appliedToRoot.get(name) === value) return false;
+		appliedToRoot.set(name, value);
+		return true;
+	};
 	function setRootVar(name, value) {
 		const text = String(value);
-		if (appliedVars.get(name) === text) return;
-		appliedVars.set(name, text);
+		if (!isNewForRoot(name, text)) return;
 		if (text) document.documentElement.style.setProperty(name, text);
 		else document.documentElement.style.removeProperty(name);
 	}
+	// A string sets the attribute, true sets it with no value, and all other values remove it.
+	function setRootAttr(name, value) {
+		const text = value === true ? '' : typeof value === 'string' ? value : null;
+		if (!isNewForRoot(name, text)) return;
+		if (text === null) document.documentElement.removeAttribute(name);
+		else document.documentElement.setAttribute(name, text);
+	}
 
 	function applyPrefs() {
-		const root = document.documentElement;
-		if (root.dataset.mhnTheme !== prefs.theme) root.dataset.mhnTheme = prefs.theme;
-		if (root.hasAttribute('data-mhn-votes') !== prefs.votes) root.toggleAttribute('data-mhn-votes', prefs.votes);
+		setRootAttr('data-mhn-theme', prefs.theme);
+		setRootAttr('data-mhn-votes', prefs.votes);
+		setRootAttr('data-mhn-unpinned', !prefs.pin);
 		setRootVar('--mhn-d', 1 - prefs.lightness / 100);
 		setRootVar('--mhn-k', prefs.contrast / 100);
 		setRootVar('--mhn-h', prefs.tone < 0 ? WARM_HUE : COOL_HUE);
@@ -1964,50 +2042,51 @@
 		setRootVar('--mhn-weight', prefs.weight);
 		setRootVar('--mhn-w', prefs.width / 100);
 		setRootVar('--mhn-round', prefs.round);
-		if (root.hasAttribute('data-mhn-round') !== hasRoundFont()) root.toggleAttribute('data-mhn-round', hasRoundFont());
+		setRootAttr('data-mhn-round', hasRoundFont());
 		for (const role of FONT_ROLES) applyFont(role);
 	}
 
-	function applyFont({ key, custom, attribute, variable }) {
-		const root = document.documentElement;
+	function applyFont({ key, nameKey, attribute, variable }) {
 		const id = prefs[key];
 		const web = WEB_FONT.get(id);
-		const kind = web ? web.kind : LOCAL_KIND.get(id);
-		if (!kind) delete root.dataset[attribute];
-		else if (root.dataset[attribute] !== kind) root.dataset[attribute] = kind;
-		setRootVar(variable, web ? `"mhn-${web.id}"` : id === 'custom' && prefs[custom] ? `"${prefs[custom]}"` : '');
-
-		if (!web) {
-			showFontState(key, '');
-			return;
-		}
-		showFontState(key, 'loading');
-		const report = (state) => { if (prefs[key] === web.id) showFontState(key, state); };
-		loadFont(web).then(() => report(''), () => report('error'));
+		// Without the attribute, the stylesheet makes the role follow the text font.
+		setRootAttr(attribute, id === SAME_FONT ? null : web ? web.kind : LOCAL_KIND.get(id));
+		setRootVar(variable, web ? `"mhn-${web.id}"` : id === 'custom' && prefs[nameKey] ? `"${prefs[nameKey]}"` : '');
+		if (web) loadFont(web);
 	}
 
-	const LAYOUT_PREFS = new Set(['size', 'weight', 'round', 'width', 'custom', 'headingCustom']);
-	let commitTimer = 0;
-	function commitPrefs() {
-		clearTimeout(commitTimer);
-		applyPrefs();
+	let saveTimer = 0;
+	function savePrefs() {
+		if (!saveTimer) return;
+		clearTimeout(saveTimer);
+		saveTimer = 0;
 		try {
 			localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
 		} catch {
 			// Storage can be blocked; the settings then last until the page closes.
 		}
+		pruneFonts(fontsInUse());
 	}
 
-	// The settings that change the text size, the text weight or the page
-	// width make the browser lay out the whole page again. On a long thread
-	// that takes longer than one frame, so those settings pass a delay: the
-	// page changes once, when the reader stops moving the slider.
-	function setPrefs(change, delay = 0) {
+	// The page changes at once. The save waits until the reader stops: each
+	// save makes every other open tab of the site apply the settings again.
+	function setPrefs(change) {
 		prefs = cleanPrefs({ ...prefs, ...change });
-		clearTimeout(commitTimer);
-		if (delay) commitTimer = setTimeout(commitPrefs, delay);
-		else commitPrefs();
+		applyPrefs();
+		clearTimeout(saveTimer);
+		saveTimer = setTimeout(savePrefs, 300);
 	}
+	window.addEventListener('pagehide', savePrefs);
+
+	// A change in another tab reaches this tab through the storage event.
+	window.addEventListener('storage', (event) => {
+		if (event.key !== PREFS_KEY) return;
+		clearTimeout(saveTimer);
+		saveTimer = 0;
+		prefs = readPrefs();
+		applyPrefs();
+		document.dispatchEvent(new Event(SETTINGS_EVENT));
+	});
 
 	const style = document.createElement('style');
 	style.id = 'mhn-style';
@@ -2025,6 +2104,16 @@
 			observer.disconnect();
 			start();
 		}).observe(document, { childList: true });
+	}
+
+	// A browser without highlight inheritance does not pass the highlight
+	// colours of the root element down the tree. It gets the rules for all
+	// elements. The check reads a computed style, so it runs when the page is idle.
+	function checkHighlightColours() {
+		const selection = (node) => getComputedStyle(node, '::selection').backgroundColor;
+		const inBody = selection(document.body);
+		const inherited = inBody === selection(document.documentElement) && inBody !== getComputedStyle(document.body).backgroundColor;
+		if (!inherited) style.append(`:root:root ::selection { ${HIGHLIGHT_COLOURS} } :root:root ::highlight(mhn-find) { ${HIGHLIGHT_COLOURS} }`);
 	}
 
 	// Path data from the Lucide icon set (24px grid, 2px stroke). Arrows mean
@@ -2160,9 +2249,13 @@
 
 		// The header grows when its rows wrap, so the scroll offset under it
 		// comes from its real height.
+		let space = '';
 		new ResizeObserver(() => {
 			const pinned = getComputedStyle(header).position === 'sticky';
-			document.documentElement.style.setProperty('--mhn-header', `${pinned ? header.offsetHeight : 0}px`);
+			const next = `calc(${pinned ? header.offsetHeight : 0}px + 1rem)`;
+			if (next === space) return;
+			space = next;
+			document.documentElement.style.scrollPaddingBlockStart = next;
 		}).observe(header);
 	}
 
@@ -2184,7 +2277,15 @@
 		return out;
 	}
 
-	const separator = () => el('span', { class: 'mhn-sep', 'aria-hidden': 'true' }, '·');
+	// One item of a meta row: a separator and a part. A long thread needs some
+	// 5,000 items, and a copy of a prepared node costs less than its pieces
+	// made one by one.
+	const itemTemplate = el('span', { class: 'mhn-item' }, el('span', { class: 'mhn-sep', 'aria-hidden': 'true' }, '·'));
+	const metaItem = (part) => {
+		const item = itemTemplate.cloneNode(true);
+		item.append(part);
+		return item;
+	};
 	const isNavLink = (node) => node.matches('a:not(.togg)') && NAV_WORDS.has(node.textContent.trim());
 
 	function rebuildMeta(container, lead) {
@@ -2201,7 +2302,7 @@
 			if (part.matches('.mhn-note') && part.textContent.endsWith(':') && rest[i + 1]) {
 				part = el('span', { class: 'mhn-pair' }, part, rest[++i]);
 			}
-			items.push(el('span', { class: 'mhn-item' }, separator(), part));
+			items.push(metaItem(part));
 		}
 		if (navLinks.length) items.push(el('span', { class: 'mhn-navs' }, ...navLinks));
 
@@ -2396,6 +2497,45 @@
 		}
 	}
 
+	// The rows that the start fold has seen. A row is folded one time only, so
+	// a thread that the reader opens stays open when more rows arrive.
+	const startFoldSeen = new WeakSet();
+
+	// Gives a row the state that collstate() of hn.js gives a folded comment,
+	// without a click: for a signed-in reader, hn.js sends each click to the server.
+	function markFolded(row, toggle) {
+		row.classList.add('coll');
+		row.querySelector('td.votelinks')?.classList.add('nosee');
+		row.querySelector('.comment')?.classList.add('noshow');
+		toggle.textContent = `[${toggle.getAttribute('n')} more]`;
+		syncToggle(toggle);
+	}
+
+	// Folds each comment at the depth that the reader set, on a page of one story.
+	function foldAtStart() {
+		if (prefs.fold < 0 || location.pathname !== '/item') return;
+		// A link to one comment must show that comment: it and the comments above it stay open.
+		const target = /^#\d+$/.test(location.hash) ? document.getElementById(location.hash.slice(1)) : null;
+		const targetDepth = target && target.matches('tr.comtr') ? depthOf(target) : -1;
+		const keep = targetDepth >= prefs.fold ? ancestorAt(target, prefs.fold) : null;
+
+		// The depth of the folded comment whose replies the loop is in.
+		let foldedAt = Infinity;
+		for (const row of document.querySelectorAll('tr.comtr')) {
+			const depth = depthOf(row);
+			const isNew = !startFoldSeen.has(row);
+			startFoldSeen.add(row);
+			if (depth > foldedAt) {
+				if (isNew) row.classList.add('noshow');
+				continue;
+			}
+			foldedAt = Infinity;
+			const toggle = row.querySelector('a.togg');
+			if (isNew && depth === prefs.fold && row !== keep && toggle && !row.classList.contains('coll')) markFolded(row, toggle);
+			if (row.classList.contains('coll')) foldedAt = depth;
+		}
+	}
+
 	function onClick(event) {
 		if (event.defaultPrevented || event.button !== 0 || !(event.target instanceof Element)) return;
 		const toggle = event.target.closest('a.togg');
@@ -2419,7 +2559,20 @@
 	/* ---------- Comment jumping ---------- */
 
 	function rootThreads() {
-		return [...document.querySelectorAll('tr.comtr:not(.noshow)')].filter((row) => depthOf(row) === 0);
+		return [...document.querySelectorAll('tr.comtr:not(.noshow, .mhn-filtered)')].filter((row) => depthOf(row) === 0);
+	}
+
+	// The index of the first item that passes the test, in a list where all
+	// the items after that one pass it too.
+	function firstIndex(list, test) {
+		let low = 0;
+		let high = list.length;
+		while (low < high) {
+			const middle = (low + high) >> 1;
+			if (test(list[middle])) high = middle;
+			else low = middle + 1;
+		}
+		return low;
 	}
 
 	// The browser's own smooth scroll has no duration setting, and it felt slow
@@ -2428,41 +2581,59 @@
 	let scrollFrame = 0;
 	const stopScroll = () => cancelAnimationFrame(scrollFrame);
 
+	// "top" is a function that gives the scroll position of the target. The
+	// browser measures a comment only when it comes near the view, so on a
+	// long thread the target moves while the page scrolls. Each frame reads
+	// the position again, and the scroll ends when the target stays in place.
 	function scrollToY(top, smooth) {
 		stopScroll();
-		const start = scrollY;
-		const end = Math.max(0, Math.min(top, document.documentElement.scrollHeight - innerHeight));
-		const distance = end - start;
-		if (!smooth || reducedMotion.matches || Math.abs(distance) < 1) {
-			window.scrollTo({ top: end, behavior: 'instant' });
-			return;
-		}
-		const duration = Math.min(350, (Math.sqrt(Math.abs(distance)) / 60) * 500);
+		const end = () => Math.max(0, Math.min(top(), document.documentElement.scrollHeight - innerHeight));
+		// A long scroll shows only its last three screens: the browser would
+		// render each comment on the way for a frame that the reader cannot read.
+		const longest = smooth ? innerHeight * 3 : 0;
+		const start = Math.max(end() - longest, Math.min(scrollY, end() + longest));
+		const distance = Math.abs(end() - start);
+		const duration = smooth && !reducedMotion.matches && distance >= 1 ? Math.min(350, (Math.sqrt(distance) / 60) * 500) : 0;
 		const began = performance.now();
+		let framesInPlace = 0;
 		const step = (now) => {
-			const progress = Math.min(1, (now - began) / duration);
-			window.scrollTo({ top: start + distance * (1 - (1 - progress) ** 3), behavior: 'instant' });
-			if (progress < 1) scrollFrame = requestAnimationFrame(step);
+			const progress = duration ? Math.min(1, (now - began) / duration) : 1;
+			window.scrollTo({ top: start + (end() - start) * (1 - (1 - progress) ** 3), behavior: 'instant' });
+			if (progress === 1) framesInPlace = Math.abs(end() - scrollY) < 1 ? framesInPlace + 1 : 0;
+			if (framesInPlace < 2 && now - began < duration + 500) scrollFrame = requestAnimationFrame(step);
 		};
-		scrollFrame = requestAnimationFrame(step);
+		step(began);
 	}
 	// The reader's own scroll input always wins over a jump in progress.
 	for (const type of ['wheel', 'touchstart']) window.addEventListener(type, stopScroll, { passive: true });
 
 	function jumpThread(direction, smooth) {
 		const line = headerBottom() + 16;
-		const heads = rootThreads().map((row) => row.querySelector('.comhead')).filter(Boolean);
-		const target = direction > 0
-			? heads.find((head) => head.getBoundingClientRect().top > line + 4)
-			: heads.findLast((head) => head.getBoundingClientRect().top < line - 4);
-		if (target) scrollToY(target.getBoundingClientRect().top + scrollY - line, smooth);
+		const rows = rootThreads();
+		// A read of a position inside a comment far from the view makes the
+		// browser lay that comment out. The box of the row itself is known, so
+		// a search on the rows finds the ones at the line, and only the heads
+		// of those rows are measured.
+		const headTop = (row) => row.querySelector('.comhead')?.getBoundingClientRect().top;
+		let target = null;
+		if (direction > 0) {
+			for (let i = firstIndex(rows, (row) => row.getBoundingClientRect().bottom > line); i < rows.length && !target; i++) {
+				if (headTop(rows[i]) > line + 4) target = rows[i];
+			}
+		} else {
+			for (let i = firstIndex(rows, (row) => row.getBoundingClientRect().top >= line - 4) - 1; i >= 0 && !target; i--) {
+				if (headTop(rows[i]) < line - 4) target = rows[i];
+			}
+		}
+		const head = target && target.querySelector('.comhead');
+		if (head) scrollToY(() => head.getBoundingClientRect().top + scrollY - line, smooth);
 	}
 
 	// Keyboard jumps are instant: an action that repeats many times must not
 	// wait on an animation. Pointer clicks on the buttons scroll with a short one.
 	const JUMPS = {
-		top: (smooth) => scrollToY(0, smooth),
-		bottom: (smooth) => scrollToY(document.documentElement.scrollHeight, smooth),
+		top: (smooth) => scrollToY(() => 0, smooth),
+		bottom: (smooth) => scrollToY(() => document.documentElement.scrollHeight, smooth),
 		prev: (smooth) => jumpThread(-1, smooth),
 		next: (smooth) => jumpThread(1, smooth),
 	};
@@ -2513,13 +2684,22 @@
 	function keepAboveFooter(group) {
 		const content = document.getElementById('bigbox');
 		if (!content) return;
+		// The content ends at the last row with a height before the footer row.
+		// On most pages that row is #bigbox. On the "threads" page the browser
+		// moves the comment rows out of #bigbox, and they follow it.
+		const footer = document.querySelector('.yclinks')?.closest('#hnmain > tbody > tr');
+		const contentEnd = () => {
+			let row = footer ? footer.previousElementSibling : content;
+			while (row && !row.offsetHeight) row = row.previousElementSibling;
+			return (row || content).getBoundingClientRect().bottom;
+		};
 		let frame = 0;
 		let lift = -1;
 		const place = () => {
 			frame = 0;
 			// Hacker News has no doctype; in that mode the root element's
 			// clientHeight is the page height, not the window height.
-			const next = Math.max(0, Math.round(innerHeight - content.getBoundingClientRect().bottom));
+			const next = Math.max(0, Math.round(innerHeight - contentEnd()));
 			if (next === lift) return;
 			lift = next;
 			group.style.setProperty('--mhn-jump-lift', `${lift}px`);
@@ -2530,8 +2710,11 @@
 		window.addEventListener('scroll', schedule, { passive: true });
 		window.addEventListener('resize', schedule);
 		// The content can change height with no scroll: a fold, more rows, a filter.
-		new ResizeObserver(schedule).observe(content);
-		place();
+		// The observer also reports the first size, so no call is necessary
+		// here; a call here would make the browser lay out the page during
+		// the start of the script. The browser calls the observer after
+		// layout, where a read of a position costs nothing.
+		new ResizeObserver(place).observe(content.parentElement);
 	}
 
 	// The jump buttons go compact when the space beside the text column is
@@ -3035,7 +3218,7 @@
 	}
 
 	function metaRow(parts) {
-		return el('div', { class: 'mhn-meta mhn-items' }, ...parts.filter(Boolean).map((part) => el('span', { class: 'mhn-item' }, separator(), part)));
+		return el('div', { class: 'mhn-meta mhn-items' }, ...parts.filter(Boolean).map(metaItem));
 	}
 
 	function renderHit(hit) {
@@ -3169,7 +3352,7 @@
 			results.setAttribute('aria-busy', 'true');
 			resultStatus.textContent = 'Search in progress…';
 			more.hidden = retry.hidden = true;
-			if (page === 0) scrollToY(0, false);
+			if (page === 0) scrollToY(() => 0, false);
 
 			let data;
 			try {
@@ -3286,7 +3469,7 @@
 
 		const themeTrack = el('div', { class: 'mhn-seg' });
 		for (const [value, label] of THEMES) {
-			themeTrack.append(el('label', {}, el('input', { type: 'radio', name: 'mhn-theme', value }), el('span', {}, label)));
+			themeTrack.append(el('label', {}, el('input', { type: 'radio', name: 'theme', value }), el('span', {}, label)));
 		}
 
 		const sliders = SLIDERS.map(([key, label, min, max, step, format]) => {
@@ -3303,43 +3486,44 @@
 		const option = (id, name) => el('option', { value: id }, name);
 		const group = (label, fonts) => el('optgroup', { label }, ...fonts.map((font) => option(font.id, font.name)));
 		// One list of fonts and one field for the name of a font on the device.
-		const fontPicker = ({ key, custom }, label, nameLabel, first) => {
+		const FONT_STATUS = {
+			loading: 'Font download in progress…',
+			error: 'The font did not download. Check the connection, then load the page again.',
+		};
+		const fontPicker = ({ key, nameKey, label, nameLabel, follows }) => {
 			const select = el('select', { id: `mhn-${key}`, name: key },
-				...first,
+				...(follows ? [option(SAME_FONT, follows)] : []),
 				group('Sans', WEB_FONTS.filter((font) => font.kind === 'sans')),
 				group('Serif', WEB_FONTS.filter((font) => font.kind === 'serif')),
 				group('Mono', WEB_FONTS.filter((font) => font.kind === 'mono')),
 				el('optgroup', { label: 'System' }, ...LOCAL_FONTS.filter(([id]) => id !== 'custom').map(([id, name]) => option(id, name))),
 				option('custom', 'Custom…'),
 			);
-			const name = el('input', { type: 'text', id: `mhn-${key}-name`, name: custom, autocomplete: 'off', spellcheck: 'false', placeholder: 'Georgia' });
+			const name = el('input', { type: 'text', id: `mhn-${key}-name`, name: nameKey, autocomplete: 'off', spellcheck: 'false', placeholder: 'Georgia' });
 			const nameField = el('div', {}, el('label', { class: 'mhn-label', for: name.id }, nameLabel), name);
 			const status = el('p', { class: 'mhn-status', role: 'status' });
 			return {
-				key,
-				status,
 				field: el('div', {}, el('label', { class: 'mhn-label', for: select.id }, label), selectBox(select), status),
 				nameField,
 				sync: () => {
 					select.value = prefs[key];
 					nameField.hidden = prefs[key] !== 'custom';
-					if (document.activeElement !== name) name.value = prefs[custom];
+					if (document.activeElement !== name) name.value = prefs[nameKey];
+					// A status region speaks each write, so only a new text is written.
+					const text = FONT_STATUS[fontState.get(prefs[key])] || '';
+					if (status.textContent !== text) status.textContent = text;
 				},
 			};
 		};
-		const [textRole, headingRole] = FONT_ROLES;
-		const pickers = [
-			fontPicker(textRole, 'Text font', 'Name of a font on this device', []),
-			fontPicker(headingRole, 'Heading font', 'Name of a heading font on this device', [option('same', 'Same as the text')]),
-		];
-		showFontState = (key, state) => {
-			pickers.find((picker) => picker.key === key).status.textContent = state === 'loading' ? 'Font download in progress…'
-				: state === 'error' ? 'The font did not download. Check the connection, then select the font again.'
-				: '';
-		};
+		const pickers = FONT_ROLES.map(fontPicker);
 
-		const votes = el('input', { type: 'checkbox', role: 'switch', name: 'votes' });
-		const votesField = el('label', { class: 'mhn-switch' }, 'Vote arrows', votes);
+		const switches = [['pin', 'Pinned header'], ['votes', 'Vote arrows']].map(([key, label]) => {
+			const input = el('input', { type: 'checkbox', role: 'switch', name: key });
+			return { key, input, field: el('label', { class: 'mhn-switch' }, label, input) };
+		});
+
+		const foldSelect = el('select', { id: 'mhn-fold', name: 'fold' }, ...FOLD_DEPTHS.map(([depth, label]) => option(String(depth), label)));
+		const foldField = el('div', {}, el('label', { class: 'mhn-label', for: 'mhn-fold' }, 'Fold comments at depth'), selectBox(foldSelect));
 
 		const reset = el('button', { type: 'button', class: 'mhn-btn' }, 'Reset');
 		const panel = el('div', { class: 'mhn-pop', id: 'mhn-settings', popover: '', role: 'dialog', 'aria-label': 'Display settings' },
@@ -3350,7 +3534,7 @@
 				slider('contrast'),
 			),
 			el('div', { class: 'mhn-group' }, ...pickers.flatMap((picker) => [picker.field, picker.nameField]), slider('size'), slider('weight'), slider('round')),
-			el('div', { class: 'mhn-group' }, slider('width'), votesField),
+			el('div', { class: 'mhn-group' }, slider('width'), foldField, ...switches.map((entry) => entry.field)),
 			reset,
 		);
 		// A narrow header has no room for the logout link; it shows here then.
@@ -3363,34 +3547,25 @@
 				input.value = prefs[key];
 				output.textContent = format(prefs[key]);
 			}
-			votes.checked = prefs.votes;
+			for (const { key, input } of switches) input.checked = prefs[key];
+			foldSelect.value = String(prefs.fold);
 			for (const picker of pickers) picker.sync();
 			slider('round').hidden = !hasRoundFont();
 		};
-		const onChange = (event) => {
-			const input = event.target;
-			if (input.type === 'checkbox') setPrefs({ [input.name]: input.checked });
-			else setPrefs({ [input.type === 'radio' ? 'theme' : input.name]: input.value }, LAYOUT_PREFS.has(input.name) ? 150 : 0);
+		// The name of each control is the key of its setting.
+		panel.addEventListener('input', ({ target }) => {
+			setPrefs({ [target.name]: target.type === 'checkbox' ? target.checked : target.value });
 			sync();
-		};
-		panel.addEventListener('input', onChange);
+		});
 		reset.addEventListener('click', () => {
 			setPrefs(DEFAULTS);
 			sync();
 		});
-		// A change in another tab reaches this tab through the storage event.
-		window.addEventListener('storage', (event) => {
-			if (event.key !== PREFS_KEY) return;
-			prefs = readPrefs();
-			applyPrefs();
-			sync();
-		});
+		document.addEventListener(SETTINGS_EVENT, sync);
 
 		const button = iconButton('Display settings', 'sliders', { popovertarget: 'mhn-settings', 'aria-haspopup': 'dialog', 'aria-expanded': 'false' });
 		anchorPopover(button, panel, 304, 'end');
 		sync();
-		// The download of a saved web font can be in progress or done by now.
-		applyPrefs();
 		document.body.append(panel);
 		account.querySelector('.mhn-tools').append(button);
 	}
@@ -3407,8 +3582,13 @@
 		}
 	}
 
+	// The parts that also run for rows that arrive later. The start fold reads
+	// the fold controls that tidyMeta prepares.
+	const ROW_PARTS = [tidyMeta, foldAtStart, addSemantics];
+
 	function init() {
-		for (const part of [buildHeader, buildDayControl, buildSearch, buildSettings, tidyMeta, labelForms, addSemantics, buildDayHeading, buildJump]) run(part);
+		for (const part of [buildHeader, buildDayControl, buildSearch, buildSettings, ...ROW_PARTS, labelForms, buildDayHeading, buildJump]) run(part);
+		(window.requestIdleCallback || setTimeout)(() => run(checkHighlightColours));
 
 		// Capture phase: hn.js stops propagation of clicks on its own links.
 		document.addEventListener('click', onClick, true);
@@ -3420,14 +3600,15 @@
 
 		// Rows arrive after the page loads: hn.js inserts a story row after
 		// "hide", and "More" adds a page of rows. Each new row gets the same
-		// meta row, semantics and page filter as the rows before it. None of
-		// these three adds or removes nodes on a second run, so the observer
-		// does not call itself without end.
+		// parts and page filter as the rows before it. A change that adds no
+		// element is skipped: hn.js writes the text of a fold control on each
+		// fold. No part adds an element on a second run, so the observer does
+		// not call itself without end.
 		const main = document.getElementById('hnmain');
 		if (main) {
-			new MutationObserver(() => {
-				run(tidyMeta);
-				run(addSemantics);
+			new MutationObserver((records) => {
+				if (!records.some((record) => [...record.addedNodes].some((node) => node.nodeType === Node.ELEMENT_NODE))) return;
+				for (const part of ROW_PARTS) run(part);
 				if (filterQuery) run(filterPage);
 			}).observe(main, { childList: true, subtree: true });
 		}
