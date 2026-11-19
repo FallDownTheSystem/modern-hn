@@ -2,6 +2,7 @@
 // @name         Modern HN
 // @namespace    modern-hn
 // @author       FallDownTheSystem
+// @license      MIT
 // @homepageURL  https://github.com/FallDownTheSystem/modern-hn
 // @supportURL   https://github.com/FallDownTheSystem/modern-hn/issues
 // @downloadURL  https://raw.githubusercontent.com/FallDownTheSystem/modern-hn/main/modern-hn.user.js

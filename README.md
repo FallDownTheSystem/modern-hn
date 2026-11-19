@@ -2,6 +2,8 @@
 
 A userscript that gives [Hacker News](https://news.ycombinator.com) a modern reading layout. It is one file with no build step. It is not affiliated with Hacker News or Y Combinator.
 
+![A story page with the settings panel open](screenshot.png)
+
 ## Install
 
 1. Install a userscript manager, for example [Tampermonkey](https://www.tampermonkey.net/).
@@ -40,3 +42,7 @@ The filter of the current page and all settings stay in your browser.
 ## Development
 
 The script is `modern-hn.user.js`. It uses tabs and CRLF line ends. Check the syntax with `node --check modern-hn.user.js`.
+
+## Licence
+
+[MIT](LICENSE)
